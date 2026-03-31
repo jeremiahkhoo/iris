@@ -53,11 +53,17 @@ The extremely small p-value provides overwhelming evidence that the classifier h
 ### EDA — Box Plots
 Distribution of all four features across species.
 
+![Box Plots](plots/boxplots.png)
+
 ### EDA — Scatter Plots
 Petal and sepal dimensions plotted against species.
 
+![Scatter Plots](plots/scatterplots.png)
+
 ### Permutation Test — Histogram
 Distribution of classification accuracies under the null hypothesis, with baseline accuracy marked.
+
+![Histogram](plots/histogram.png)
 
 ---
 
