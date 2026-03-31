@@ -1,0 +1,257 @@
+---
+title: "Iris"
+author: "Jeremiah Khoo"
+date: "2025-11-13"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message = FALSE, warning = FALSE, include = FALSE}
+library(tidyverse)
+library(magrittr)
+library(knitr)
+library(gridExtra)
+library(nnet)
+library(caret)
+```
+
+# 1. Introduction
+
+Permutation testing provides a framework for assessing whether a classifier's performance is genuinely capturing underlying patterns in the data (statistically significant), or just due to random chance (statistically insignificant). This report explores the application of permutation based p-values to evaluate the performance of logistic regression on the `iris` dataset, synthesizing concepts from both statistical hypothesis testing and classification methods.
+
+The central question to be addressed is:\
+**Does Logistic Regression genuinely capture meaningful relationships in the `iris` dataset or could similar classification accuracy arise due to random chance?**
+
+Following the framework proposed by Ojala and Garriga (2009), we will focus on **permuting labels**, where permutation testing is conducted to test whether features and species labels in the `iris` dataset are independent.
+
+# 2. Exploratory Data Analysis (EDA)
+
+```{r}
+data(iris)
+head(iris)
+summary(iris)
+```
+
+The `iris` dataset contains 150 observations of 3 iris species (*setosa*, *versicolor*, *virginica*), with 50 observations per species. 4 features are measured: sepal length, sepal width, petal length and petal width (all in cm).
+
+```{r}
+iris %>%
+  group_by(Species) %>%
+  summarise(mean_petal_length = mean(Petal.Length),
+            mean_petal_width = mean(Petal.Width),
+            mean_sepal_length = mean(Sepal.Length),
+            mean_sepal_width = mean(Sepal.Width)) %>%
+  kable(caption = "Mean Values of All Features by Species")
+```
+
+From the table, we can infer that:\
+**Petal measurements** show the clearest separation by species. *Setosa* has much smaller petals (length = 1.462cm, width = 0.246cm) compared to *versicolor* (length = 4.260cm, width = 1.326cm) and *virginica* (length = 5.552cm, width = 2.026cm).\
+**Sepal measurements** also differ, but with less dramatic separation. Interestingly, *setosa* has the widest sepals (mean = 3.428cm) despite having the smallest petals.
+
+```{r}
+p1 <- ggplot(iris, aes(x = Species, y = Sepal.Length, fill = Species)) +
+  geom_boxplot(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Sepal Length", y = "Length (cm)") +
+  theme(legend.position = "none")
+
+p2 <- ggplot(iris, aes(x = Species, y = Sepal.Width, fill = Species)) +
+  geom_boxplot(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Sepal Width", y = "Width (cm)") +
+  theme(legend.position = "none")
+
+p3 <- ggplot(iris, aes(x = Species, y = Petal.Length, fill = Species)) +
+  geom_boxplot(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Petal Length", y = "Length (cm)") +
+  theme(legend.position = "none")
+
+p4 <- ggplot(iris, aes(x = Species, y = Petal.Width, fill = Species)) +
+  geom_boxplot(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Petal Width", y = "Width (cm)") +
+  theme(legend.position = "none")
+
+grid.arrange(p1, p2, p3, p4, ncol = 2, 
+             top = "Distribution of All Four Features Across Species")
+```
+
+From the boxplots, we can infer that:\
+- **Petal measurements** (bottom row) show the most dramatic separation between the species with minimal overlap.\
+- **Sepal width** (top right) overlaps considerably between *versicolor* and *virginica*.\
+- **Sepal length** (top left) shows moderate separation.\
+- *Setosa* is clearly distinguishable across all four features.
+
+```{r}
+p5 <- ggplot(iris, aes(x = Petal.Length, y = Petal.Width, color = Species)) +
+  geom_point(size = 2, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Petal Dimensions",
+       x = "Petal Length (cm)", y = "Petal Width (cm)") +
+  theme(legend.position = "bottom")
+
+p6 <- ggplot(iris, aes(x = Sepal.Length, y = Sepal.Width, color = Species)) +
+  geom_point(size = 2, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Sepal Dimensions",
+       x = "Sepal Length (cm)", y = "Sepal Width (cm)") +
+  theme(legend.position = "bottom")
+
+grid.arrange(p5, p6, ncol = 2,
+             top = "Relationship between Petal/Sepal Dimesions and Species")
+```
+
+From the scatterplot, we can infer that:
+
+For **petal dimensions (left)**:\
+- *Setosa* forms a completely distinct cluster in the lower left.\
+- *Versicolor* and *virginica* show some overlap but remain largely separable.\
+- Clear positive correlation between petal length and petal width.
+
+For **sepal dimensions (right)**:\
+- Much more overlap between all 3 species.\
+- *Setosa* is still distinguishable but less clearly separated.
+
+While all 4 features contain information about iris species, petal measurements provide stronger distinction between species. However, using all 4 features together should provide the best classification performance.
+
+# 3. Multinomial Logistic Regression
+
+## 3.1 Model Specification
+
+Since we have 3 species (\> 2 categories), we use **Multinomial Logistic Regression**.\
+For the `iris` dataset, using *setosa* as the reference, the model estimates:
+
+$$\ln\left(\frac{P(\text{versicolor})}{P(\text{setosa})}\right) = \beta_{0}^{1} + \beta_{1}^{1}(\text{Sepal.Length}) + \beta_{2}^{1}(\text{Sepal.Width}) + \beta_{3}^{1}(\text{Petal.Length}) + \beta_{4}^{1}(\text{Petal.Width})$$
+
+$$\ln\left(\frac{P(\text{virginica})}{P(\text{setosa})}\right) = \beta_{0}^{2} + \beta_{1}^{2}(\text{Sepal.Length}) + \beta_{2}^{2}(\text{Sepal.Width}) + \beta_{3}^{2}(\text{Petal.Length}) + \beta_{4}^{2}(\text{Petal.Width})$$
+
+## 3.2 Model Fitting
+```{r, results = "hide"}
+model <- multinom(Species ~ ., data = iris)
+```
+
+```{r}
+coef_summary <- round(coef(model), 3)
+kable(coef_summary, 
+      caption = "Multinomial Logistic Regression Coefficients")
+```
+
+The coefficients show how each feature affects the log-odds. For example, increasing `Petal.Length` increases the log-odds of being *versicolor* or *virginica* relative to *setosa*, which aligns with our observation that *setosa* has smaller petals.
+
+## 3.3 Classification Accuracy
+
+```{r}
+prediction <- predict(model, newdata = iris)
+confusionMatrix(prediction, iris$Species)
+baseline <- mean(prediction == iris$Species)
+baseline
+```
+
+From the confusion matrix, the logistic regression model achieved a classification accuracy of 98.67%, indicating strong evidence that features can be used to predict a flower's species in the `iris` dataset. We will use this as the baseline when we conduct permutation testing later and verify if the baseline accuracy of 98.67% is statistically significant.
+
+# 4. Permutation Testing: Label Permutation
+
+## 4.1 The Null and Alternative Hypothesis
+
+Permutation testing evaluates whether our observed classification accuracy could arise by pure chance under a specified null hypothesis.
+
+**Null Hypothesis** ($H_{0}$): The features (sepal/petal measurements) and species labels are **independent**. There is no genuine relationship between flower measurements and species identity.
+
+**Alternative Hypothesis** ($H_{1}$): The features and labels are **dependent**. Flower measurements contain meaningful information about species.
+
+If $H_{0}$ is true, then randomly shuffling species labels should produce datasets that look statistically similar to our original data. Classifiers trained on these shuffled datasets should perform comparably to our original classifier.
+
+## 4.2 Procedure
+
+1.  Calculate the test statistic on the original data: *classification accuracy = 98.67% (as seen in Section 3.3)*\
+2.  Repeat the following steps 10000 times:
+
+-   Randomly shuffle the species labels (keep features fixed)\
+-   Calculate classification accuracy on this permuted dataset\
+-   Store the classification accuracy
+
+3.  Calculate p-value:\
+    $\text{p-value} = \frac{(\text{no. of permuted classification accuracies } \geq \text{ baseline classification accuracy}) + 1}{N + 1}$
+
+By permuting the labels, The association between features and species is destroyed (e.g., a flower with long petals might now be labeled as *setosa*). However, marginal class frequencies (50/50/50), feature distributions and feature correlations are preserved.
+
+If $H_{0}$ is true, the classifiers trained on these permuted datasets should perform similarly to the original classifier. If $H_{0}$ is false (features predict species), the classifiers trained on the permuted datasets should perform much worse.
+
+**Important Note on Test Statistic Choice**
+
+This analysis uses **training accuracy** (fitting and testing on the same data) as the test statistic. While this measure is optimistic due to overfitting, the permutation test framework remains valid because:\
+1. Both the original and permuted datasets are evaluated using the same criterion.\
+2. We are comparing relative performance, not absolute generalization ability.\
+3. Ojala & Garriga (2009) note that permutation tests can use "training error, cross-validation error or jackknife estimate".
+
+## 4.3 Implementation
+
+```{r, results = "hide"}
+options(scipen = 999)
+set.seed(123)
+
+N <- 10000
+result <- numeric(N)
+
+for (i in 1:N) {
+  iris_permuted <- iris
+  iris_permuted$Species <- sample(iris$Species, replace = FALSE)
+  model_perm <- multinom(Species ~ ., data = iris_permuted)
+  prediction_perm <- predict(model_perm, newdata = iris_permuted)
+  result[i] <- mean(prediction_perm == iris_permuted$Species)
+}
+```
+
+# 5. Results and Interpretation
+
+```{r}
+p_value <- (sum(result >= baseline) + 1) / (N + 1)
+p_value
+```
+
+```{r}
+hist(result, 
+     breaks = 40, 
+     col = "lightblue",
+     main = "Distribution of Accuracies Under Null Hypothesis",
+     xlab = "Classification Accuracy",
+     xlim = c(0, 1))
+abline(v = baseline, col = "red", lwd = 3, lty = 2)
+abline(v = mean(result), col = "blue", lwd = 2)
+legend("topright", 
+       c(paste("Baseline =", round(baseline, 3)),
+         paste("Mean Permuted =", round(mean(result), 3)),
+         paste("p-value =", p_value)),
+       col = c("red", "blue", "black"), lty = c(2, 1, 0))
+```
+
+We obtained a p-value of 0.00009999. This means that only 1 of the 10000 models trained on the permuted datasets achieved a classification accuracy $\geq$ our baseline of 98.67%. Since p-value \< 0.05, we reject $H_{0}$ at the 95% confidence level and conclude that our Multinomial Logistic Regression model's classification accuracy of 98.67% is statistically significant. We can therefore say that there is a relationship between the features and labels in the `iris` dataset. Flower features contain meaningful information about its species.
+
+Under $H_{0}$, randomly guessing with 3 equally likely species would give an expected accuracy of $\frac{1}{3} \approx 0.333$. Since **training accuracy** was used as the test statistic in our permutation test, the model is evaluated on the same data it was fit on, and can partially overfit even random noise. This inflates the mean permuted accuracy $\approx 0.412$ to be slightly above the theoretical chance level of $\frac{1}{3}$. Nevertheless, the mean permuted accuracy is much closer to random than it is compared to the baseline. This confirms that our Multinomial Logistic Regression classifier exploits genuine structure and performs significantly better than random chance, thereby showing that features and labels are not independent.
+
+# 6. Limitations
+
+1.  As mentioned earlier, our use of training accuracy provides an optimistic estimate of performance (overfitting). We can mitigate this by using cross-validation accuracy.\
+2.  Increasing the number of permutations would lead to more accurate and reliable results, but at the expense of higher computational cost.\
+3.  We only tested Multinomial Logistic Regression. Other classifiers such as Decision Trees and Naive Bayes might perform differently.\
+4.  The `iris` dataset is clean and has perfectly balanced classes with 50 each. However, real-world data might not be so clean and often has imbalanced classes.
+
+# 7. Conclusion
+
+This analysis successfully synthesizes permutation testing with Multinomial Logistic Regression to rigorously assess classifier significance in the `iris` dataset.
+
+**Key Findings**\
+- Baseline classifier accuracy: 98.67%\
+- p-value: 0.00009999 (Statistically significant)\
+- Conclusion: Features genuinely predict species
+
+Statistical significance confirms the biological meaningfulness of iris morphological features. The extremely small p-value provides overwhelming evidence that the Multinomial Logistic Regression classifier has learned genuine patterns rather than random noise.
+
+# References
+
+Ojala, M., & Garriga, G. C. (2009). Permutation Tests for Studying Classifier Performance. *2009 Ninth IEEE International Conference on Data Mining*, 908-913.
+
