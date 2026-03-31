@@ -1,6 +1,6 @@
 # 🌸 Iris — Permutation Test Classification
 
-> An individual data analysis project exploring whether Multinomial Logistic Regression genuinely captures meaningful patterns in the Iris dataset, validated through Permutation Testing.
+> An individual data analysis project exploring whether Multinomial Logistic Regression genuinely captures meaningful patterns in the Iris dataset, validated through Permutation Testing.  
 > Conducted as part of coursework (DSA3361) at the National University of Singapore (NUS).
 
 ---
@@ -64,8 +64,7 @@ Distribution of classification accuracies under the null hypothesis, with baseli
 ## 🧰 Tools & Libraries
 
 - **Language:** R
-- **Libraries:** `ggplot2`, `gridExtra`, `nnet`, `caret`, `knitr`
-
+- **Libraries:** `tidyverse`, `magrittr`, `knitr`, `gridExtra`, `nnet`, `caret`
 ---
 
 ## 📁 Files
